@@ -425,7 +425,7 @@ failed to lock: nil key
 --- request
 GET /t
 --- response_body
-4
+1
 --- no_error_log
 [error]
 --- skip_eval: 3: system("$NginxBinary -V 2>&1 | grep -- '--with-debug'") ne 0

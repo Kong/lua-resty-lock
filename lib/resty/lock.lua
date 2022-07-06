@@ -26,6 +26,51 @@ local memo = {}
 if debug then _M.memo = memo end
 
 
+local ref_dict, get_dict
+do
+    local id_to_dict = {}
+    local dict_name_to_id = {}
+    local max_id = 0
+
+    -- persist a shm object to a private table so that it can be referenced
+    -- by an integer id during garbage collection:
+    --
+    -- a mapping of shm name to id is also kept, so duplicate names will simply
+    -- reuse an existing slot/id
+    --
+    -- no cleanup or lifecycle management is performed here, based on several
+    -- assumptions:
+    --
+    --   * the total number of ngx.shared.* zones is bounded and will not grow
+    --     at runtime
+    --
+    --   * in addition to being bounded, the total number of ngx.shared.* zones
+    --     is typically quite low, and most applications tend to use a limited
+    --     subset of them for locks
+    --
+    --   * the overhead from storing the reference permanently should be vastly
+    --     offset by the fact that we are no longer storing duplicate
+    --     references in the primary memo table
+    --
+    function ref_dict(name, dict)
+        local id = dict_name_to_id[name]
+        if not id then
+            id = max_id + 1
+            max_id = id
+            id_to_dict[id] = dict
+            dict_name_to_id[name] = id
+        end
+
+        return id
+    end
+
+    function get_dict(id)
+        id = tonumber(id)
+        return id_to_dict[id]
+    end
+end
+
+
 local function ref_obj(key)
     if key == nil then
         return -1
@@ -63,7 +108,7 @@ local function gc_lock(cdata)
     if key_id > 0 then
         local key = memo[key_id]
         unref_obj(key_id)
-        local dict = memo[dict_id]
+        local dict = get_dict(dict_id)
         -- print("dict.delete type: ", type(dict.delete))
         local ok, err = dict:delete(key)
         if not ok then
@@ -71,8 +116,6 @@ local function gc_lock(cdata)
         end
         cdata.key_id = 0
     end
-
-    unref_obj(dict_id)
 end
 
 
@@ -87,7 +130,7 @@ function _M.new(_, dict_name, opts)
     end
     local cdata = ffi_new(ctype)
     cdata.key_id = 0
-    cdata.dict_id = ref_obj(dict)
+    cdata.dict_id = ref_dict(dict_name, dict)
 
     local timeout, exptime, step, ratio, max_step
     if opts then
