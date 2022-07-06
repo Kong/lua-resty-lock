@@ -68,7 +68,7 @@ function _M.new(_, dict_name, opts)
 
     local self = gctable({
         dict = dict,
-	key = nil,
+	    key = nil,
         timeout = timeout or 5,
         exptime = exptime,
         step = step or 0.001,
@@ -133,6 +133,10 @@ end
 function _M.unlock(self)
     local dict = self.dict
     local key = self.key
+
+    if not key then
+        return nil, "unlocked"
+    end
 
     local ok, err = dict:delete(key)
     if not ok then
