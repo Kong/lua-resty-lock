@@ -8,6 +8,8 @@ local sleep = ngx.sleep
 local max = math.max
 local min = math.min
 local setmetatable = setmetatable
+local getmetatable = getmetatable
+local newproxy = newproxy
 
 local _M = { _VERSION = '0.08' }
 local mt = { __index = _M }
@@ -36,6 +38,7 @@ local function gctable(tbl)
   pmt.__table = tbl
   pmt.__free = gc_lock
   pmt.__gc = _gc
+
   return tbl
 end
 
