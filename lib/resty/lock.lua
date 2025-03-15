@@ -3,91 +3,50 @@
 
 require "resty.core.shdict"  -- enforce this to avoid dead locks
 
-local ffi = require "ffi"
-local ffi_new = ffi.new
 local shared = ngx.shared
 local sleep = ngx.sleep
-local log = ngx.log
 local max = math.max
 local min = math.min
-local debug = ngx.config.debug
 local setmetatable = setmetatable
-local tonumber = tonumber
+local getmetatable = getmetatable
+local newproxy = newproxy
 
 local _M = { _VERSION = '0.08' }
 local mt = { __index = _M }
 
-local ERR = ngx.ERR
-local FREE_LIST_REF = 0
 
--- FIXME: we don't need this when we have __gc metamethod support on Lua
---        tables.
-local memo = {}
-if debug then _M.memo = memo end
-
-
-local function ref_obj(key)
-    if key == nil then
-        return -1
-    end
-    local ref = memo[FREE_LIST_REF]
-    if ref and ref ~= 0 then
-         memo[FREE_LIST_REF] = memo[ref]
-
-    else
-        ref = #memo + 1
-    end
-    memo[ref] = key
-
-    -- print("ref key_id returned ", ref)
-    return ref
-end
-if debug then _M.ref_obj = ref_obj end
-
-
-local function unref_obj(ref)
-    if ref >= 0 then
-        memo[ref] = memo[FREE_LIST_REF]
-        memo[FREE_LIST_REF] = ref
-    end
-end
-if debug then _M.unref_obj = unref_obj end
-
-
-local function gc_lock(cdata)
-    local dict_id = tonumber(cdata.dict_id)
-    local key_id = tonumber(cdata.key_id)
-
-    -- print("key_id: ", key_id, ", key: ", memo[key_id], "dict: ",
-    --       type(memo[cdata.dict_id]))
-    if key_id > 0 then
-        local key = memo[key_id]
-        unref_obj(key_id)
-        local dict = memo[dict_id]
-        -- print("dict.delete type: ", type(dict.delete))
-        local ok, err = dict:delete(key)
-        if not ok then
-            log(ERR, 'failed to delete key "', key, '": ', err)
-        end
-        cdata.key_id = 0
-    end
-
-    unref_obj(dict_id)
+local function _gc(proxy)
+  local pmt = getmetatable(proxy)
+  if pmt and pmt.__free and pmt.__table then
+    pmt.__free(pmt.__table)
+  end
 end
 
+local function gc_lock(self)
+  if self.key then
+    self.dict:delete(self.key)
+  end
+end
 
-local ctype = ffi.metatype("struct { int key_id; int dict_id; }",
-                           { __gc = gc_lock })
+local function gctable(tbl)
+  -- return an userdata with metatable
+  local proxy = newproxy(true)
+  -- store the reference of userdata in table
+  -- so it's GC handler is called when table is GC'ed
+  tbl.__proxy = proxy
+  local pmt = getmetatable(proxy)
+  pmt.__table = tbl
+  pmt.__free = gc_lock
+  pmt.__gc = _gc
 
+  return tbl
+end
 
 function _M.new(_, dict_name, opts)
     local dict = shared[dict_name]
     if not dict then
         return nil, "dictionary not found"
     end
-    local cdata = ffi_new(ctype)
-    cdata.key_id = 0
-    cdata.dict_id = ref_obj(dict)
 
     local timeout, exptime, step, ratio, max_step
     if opts then
@@ -110,15 +69,15 @@ function _M.new(_, dict_name, opts)
         end
     end
 
-    local self = {
-        cdata = cdata,
+    local self = gctable({
         dict = dict,
+	    key = nil,
         timeout = timeout or 5,
         exptime = exptime,
         step = step or 0.001,
         ratio = ratio or 2,
         max_step = max_step or 0.5,
-    }
+    })
     setmetatable(self, mt)
     return self
 end
@@ -130,14 +89,12 @@ function _M.lock(self, key)
     end
 
     local dict = self.dict
-    local cdata = self.cdata
-    if cdata.key_id > 0 then
-        return nil, "locked"
+    if self.key then
+      return nil, "locked"
     end
     local exptime = self.exptime
     local ok, err = dict:add(key, true, exptime)
     if ok then
-        cdata.key_id = ref_obj(key)
         self.key = key
         return 0
     end
@@ -157,7 +114,6 @@ function _M.lock(self, key)
 
         local ok, err = dict:add(key, true, exptime)
         if ok then
-            cdata.key_id = ref_obj(key)
             self.key = key
             return elapsed
         end
@@ -179,20 +135,17 @@ end
 
 function _M.unlock(self)
     local dict = self.dict
-    local cdata = self.cdata
-    local key_id = tonumber(cdata.key_id)
-    if key_id <= 0 then
+    local key = self.key
+
+    if not key then
         return nil, "unlocked"
     end
-
-    local key = memo[key_id]
-    unref_obj(key_id)
 
     local ok, err = dict:delete(key)
     if not ok then
         return nil, err
     end
-    cdata.key_id = 0
+    self.key = nil
 
     return 1
 end
@@ -200,10 +153,8 @@ end
 
 function _M.expire(self, time)
     local dict = self.dict
-    local cdata = self.cdata
-    local key_id = tonumber(cdata.key_id)
-    if key_id <= 0 then
-        return nil, "unlocked"
+    if not self.key then
+      return nil, "unlocked"
     end
 
     if not time then
@@ -217,6 +168,5 @@ function _M.expire(self, time)
 
     return true
 end
-
 
 return _M

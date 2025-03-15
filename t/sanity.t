@@ -292,81 +292,7 @@ $
 
 
 
-=== TEST 9: ref & unref (1 at most)
---- http_config eval: $::HttpConfig
---- config
-    location = /t {
-        content_by_lua_block {
-            local lock = require "resty.lock"
-            local memo = lock.memo
-            local ref = lock.ref_obj("foo")
-            ngx.say(#memo)
-            lock.unref_obj(ref)
-            ngx.say(#memo)
-            ref = lock.ref_obj("bar")
-            ngx.say(#memo)
-            lock.unref_obj(ref)
-            ngx.say(#memo)
-        }
-    }
---- request
-GET /t
---- response_body
-1
-0
-1
-0
-
---- no_error_log
-[error]
---- skip_eval: 3: system("$NginxBinary -V 2>&1 | grep -- '--with-debug'") ne 0
-
-
-
-=== TEST 10: ref & unref (2 at most)
---- http_config eval: $::HttpConfig
---- config
-    location = /t {
-        content_by_lua_block {
-            local lock = require "resty.lock"
-            local memo = lock.memo
-
-            for i = 1, 2 do
-                local refs = {}
-
-                refs[1] = lock.ref_obj("foo")
-                ngx.say(#memo)
-
-                refs[2] = lock.ref_obj("bar")
-                ngx.say(#memo)
-
-                lock.unref_obj(refs[1])
-                ngx.say(#memo)
-
-                lock.unref_obj(refs[2])
-                ngx.say(#memo)
-            end
-        }
-    }
---- request
-GET /t
---- response_body
-1
-2
-2
-2
-2
-2
-1
-1
-
---- no_error_log
-[error]
---- skip_eval: 3: system("$NginxBinary -V 2>&1 | grep -- '--with-debug'") ne 0
-
-
-
-=== TEST 11: lock on a nil key
+=== TEST 9: lock on a nil key
 --- http_config eval: $::HttpConfig
 --- config
     location = /t {
@@ -395,13 +321,12 @@ failed to lock: nil key
 
 
 
-=== TEST 12: same shdict, multple locks
+=== TEST 10: same shdict, multple locks
 --- http_config eval: $::HttpConfig
 --- config
     location = /t {
         content_by_lua_block {
             local lock = require "resty.lock"
-            local memo = lock.memo
             local lock1 = lock:new("cache_locks", { timeout = 0.01 })
             for i = 1, 3 do
                 lock1:lock("lock_key")
@@ -415,24 +340,25 @@ failed to lock: nil key
             lock3:lock("lock_key")
             collectgarbage("collect")
 
-            ngx.say(#memo)
 
             lock2:unlock()
             lock3:unlock()
             collectgarbage("collect")
+
+            ngx.say("ok")
         }
     }
 --- request
 GET /t
 --- response_body
-4
+ok
 --- no_error_log
 [error]
 --- skip_eval: 3: system("$NginxBinary -V 2>&1 | grep -- '--with-debug'") ne 0
 
 
 
-=== TEST 13: timed out locks (0 timeout)
+=== TEST 11: timed out locks (0 timeout)
 --- http_config eval: $::HttpConfig
 --- config
     location = /t {
@@ -473,7 +399,7 @@ lock 2: unlock: nil, unlocked
 
 
 
-=== TEST 13: expire()
+=== TEST 12: expire()
 --- http_config eval: $::HttpConfig
 --- config
     location = /t {
